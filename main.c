@@ -836,6 +836,7 @@ static void hf_free_resources(void)
 	kfree(hf_vms);
 
 	ffa_rx_release();
+	ffa_rxtx_unmap();
 	if (hf_send_page) {
 		__free_page(hf_send_page);
 		hf_send_page = NULL;
@@ -1006,9 +1007,7 @@ static int __init hf_init(void)
 	}
 
 	/*
-	 * Configure both addresses. Once configured, we cannot free these pages
-	 * because the hypervisor will use them, even if the module is
-	 * unloaded.
+	 * Map RX/TX buffers to hypervisor.
 	 */
 	ffa_ret = ffa_rxtx_map(page_to_phys(hf_send_page),
 				 page_to_phys(hf_recv_page));
