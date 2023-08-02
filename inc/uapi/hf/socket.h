@@ -27,6 +27,6 @@
  */
 struct hf_sockaddr {
 	__kernel_sa_family_t family;
-	ffa_vm_id_t vm_id;
+	ffa_id_t vm_id;
 	uint64_t port;
 };

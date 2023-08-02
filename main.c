@@ -56,7 +56,7 @@ struct hf_vcpu {
 };
 
 struct hf_vm {
-	ffa_vm_id_t id;
+	ffa_id_t id;
 	ffa_vcpu_count_t vcpu_count;
 	struct hf_vcpu *vcpu;
 };
@@ -90,12 +90,12 @@ static DEFINE_HASHTABLE(hf_local_port_hash, 7);
 static DEFINE_SPINLOCK(hf_local_port_hash_lock);
 static int hf_irq;
 static enum cpuhp_state hf_cpuhp_state;
-static ffa_vm_id_t current_vm_id;
+static ffa_id_t current_vm_id;
 
 /**
  * Retrieves a VM from its ID, returning NULL if the VM doesn't exist.
  */
-static struct hf_vm *hf_vm_from_id(ffa_vm_id_t vm_id)
+static struct hf_vm *hf_vm_from_id(ffa_id_t vm_id)
 {
 	if (vm_id < FIRST_SECONDARY_VM_ID ||
 	    vm_id >= FIRST_SECONDARY_VM_ID + hf_vm_count)
@@ -158,7 +158,7 @@ static enum hrtimer_restart hf_vcpu_timer_expired(struct hrtimer *timer)
  *
  * It wakes up the thread if it's sleeping, or kicks it if it's already running.
  */
-static void hf_handle_wake_up_request(ffa_vm_id_t vm_id,
+static void hf_handle_wake_up_request(ffa_id_t vm_id,
 				      ffa_vcpu_index_t vcpu)
 {
 	struct hf_vm *vm = hf_vm_from_id(vm_id);
@@ -188,7 +188,7 @@ static void hf_handle_wake_up_request(ffa_vm_id_t vm_id,
  * Injects an interrupt into a vCPU of the VM and ensures the vCPU will run to
  * handle the interrupt.
  */
-static void hf_interrupt_vm(ffa_vm_id_t vm_id, uint64_t int_id)
+static void hf_interrupt_vm(ffa_id_t vm_id, uint64_t int_id)
 {
 	struct hf_vm *vm = hf_vm_from_id(vm_id);
 	ffa_vcpu_index_t vcpu;
@@ -223,9 +223,9 @@ static void hf_interrupt_vm(ffa_vm_id_t vm_id, uint64_t int_id)
 /**
  * Notify all waiters on the given VM.
  */
-static void hf_notify_waiters(ffa_vm_id_t vm_id)
+static void hf_notify_waiters(ffa_id_t vm_id)
 {
-	ffa_vm_id_t waiter_vm_id;
+	ffa_id_t waiter_vm_id;
 
 	while ((waiter_vm_id = hf_mailbox_waiter_get(vm_id)) != -1) {
 		if (waiter_vm_id == PRIMARY_VM_ID) {
@@ -243,7 +243,7 @@ static void hf_notify_waiters(ffa_vm_id_t vm_id)
 /**
  * Delivers a message to a VM.
  */
-static void hf_deliver_message(ffa_vm_id_t vm_id)
+static void hf_deliver_message(ffa_id_t vm_id)
 {
 	struct hf_vm *vm = hf_vm_from_id(vm_id);
 	ffa_vcpu_index_t i;
@@ -366,7 +366,7 @@ static int hf_vcpu_thread(void *data)
 		/* Preempted, or wants to wake up another vCPU. */
 		case FFA_INTERRUPT_32:
 		{
-			ffa_vm_id_t vm_id = ffa_vm_id(ret);
+			ffa_id_t vm_id = ffa_vm_id(ret);
 			ffa_vcpu_index_t vcpu_index = ffa_vcpu_index(ret);
 
 			if (vm_id >= FIRST_SECONDARY_VM_ID &&
@@ -984,7 +984,7 @@ static int __init hf_init(void)
 	};
 	int64_t ret;
 	struct ffa_value ffa_ret;
-	ffa_vm_id_t i;
+	ffa_id_t i;
 	ffa_vcpu_index_t j;
 	struct ffa_uuid null_uuid;
 	ffa_vm_count_t secondary_vm_count;
