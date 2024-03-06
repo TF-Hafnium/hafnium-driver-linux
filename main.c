@@ -12,7 +12,12 @@
  * GNU General Public License for more details.
  */
 
+#include "uapi/hf/socket.h"
 #include <clocksource/arm_arch_timer.h>
+#include <hf/call.h>
+#include <hf/ffa.h>
+#include <hf/transport.h>
+#include <hf/vm_ids.h>
 #include <linux/atomic.h>
 #include <linux/cpuhotplug.h>
 #include <linux/hrtimer.h>
@@ -30,16 +35,9 @@
 #include <linux/slab.h>
 #include <net/sock.h>
 
-#include <hf/call.h>
-#include <hf/ffa.h>
-#include <hf/transport.h>
-#include <hf/vm_ids.h>
-
-#include "uapi/hf/socket.h"
-
 #define HYPERVISOR_TIMER_NAME "el2_timer"
 
-#define CONFIG_HAFNIUM_MAX_VMS   16
+#define CONFIG_HAFNIUM_MAX_VMS 16
 #define CONFIG_HAFNIUM_MAX_VCPUS 32
 
 #define HF_VM_ID_BASE 0
@@ -80,8 +78,12 @@ static struct proto hf_sock_proto = {
 	.obj_size = sizeof(struct hf_sock),
 };
 
-static struct hf_vm *hf_vms;
-static ffa_vm_count_t hf_vm_count;
+static struct hf_vm hf_vms[] = {{
+	.id = 2,
+	.vcpu_count = 1,
+}};
+const ffa_vm_count_t hf_vm_count = ARRAY_SIZE(hf_vms);
+
 static struct page *hf_send_page;
 static struct page *hf_recv_page;
 static atomic64_t hf_next_port = ATOMIC64_INIT(0);
@@ -158,8 +160,7 @@ static enum hrtimer_restart hf_vcpu_timer_expired(struct hrtimer *timer)
  *
  * It wakes up the thread if it's sleeping, or kicks it if it's already running.
  */
-static void hf_handle_wake_up_request(ffa_id_t vm_id,
-				      ffa_vcpu_index_t vcpu)
+static void hf_handle_wake_up_request(ffa_id_t vm_id, ffa_vcpu_index_t vcpu)
 {
 	struct hf_vm *vm = hf_vm_from_id(vm_id);
 
@@ -169,8 +170,8 @@ static void hf_handle_wake_up_request(ffa_id_t vm_id,
 	}
 
 	if (vcpu >= vm->vcpu_count) {
-		pr_warn("Request to wake up non-existent vCPU: %u.%u\n",
-			vm_id, vcpu);
+		pr_warn("Request to wake up non-existent vCPU: %u.%u\n", vm_id,
+			vcpu);
 		return;
 	}
 
@@ -364,8 +365,7 @@ static int hf_vcpu_thread(void *data)
 
 		switch (ret.func) {
 		/* Preempted, or wants to wake up another vCPU. */
-		case FFA_INTERRUPT_32:
-		{
+		case FFA_INTERRUPT_32: {
 			ffa_id_t vm_id = ffa_vm_id(ret);
 			ffa_vcpu_index_t vcpu_index = ffa_vcpu_index(ret);
 
@@ -833,8 +833,6 @@ static void hf_free_resources(void)
 		kfree(vm->vcpu);
 	}
 
-	kfree(hf_vms);
-
 	ffa_rx_release();
 	ffa_rxtx_unmap();
 	if (hf_send_page) {
@@ -910,8 +908,8 @@ static int hf_int_driver_probe(struct platform_device *pdev)
 	ret = request_percpu_irq(irq, hf_nop_irq_handler, HYPERVISOR_TIMER_NAME,
 				 pdev);
 	if (ret != 0) {
-		pr_err("Error registering hypervisor timer IRQ %d: %d\n",
-		       irq, ret);
+		pr_err("Error registering hypervisor timer IRQ %d: %d\n", irq,
+		       ret);
 		return ret;
 	}
 	pr_info("Hafnium registered for IRQ %d\n", irq);
@@ -946,15 +944,14 @@ static int hf_int_driver_remove(struct platform_device *pdev)
 static const struct of_device_id hf_int_driver_id[] = {
 	{.compatible = "arm,armv7-timer"},
 	{.compatible = "arm,armv8-timer"},
-	{}
-};
+	{}};
 
 static struct platform_driver hf_int_driver = {
 	.driver = {
-		.name = HYPERVISOR_TIMER_NAME,
-		.owner = THIS_MODULE,
-		.of_match_table = of_match_ptr(hf_int_driver_id),
-	},
+			.name = HYPERVISOR_TIMER_NAME,
+			.owner = THIS_MODULE,
+			.of_match_table = of_match_ptr(hf_int_driver_id),
+		},
 	.probe = hf_int_driver_probe,
 	.remove = hf_int_driver_remove,
 };
@@ -986,9 +983,6 @@ static int __init hf_init(void)
 	struct ffa_value ffa_ret;
 	ffa_id_t i;
 	ffa_vcpu_index_t j;
-	struct ffa_uuid null_uuid;
-	ffa_vm_count_t secondary_vm_count;
-	const struct ffa_partition_info *partition_info;
 	uint32_t total_vcpu_count;
 
 	/* Allocate a page for send and receive buffers. */
@@ -1010,7 +1004,7 @@ static int __init hf_init(void)
 	 * Map RX/TX buffers to hypervisor.
 	 */
 	ffa_ret = ffa_rxtx_map(page_to_phys(hf_send_page),
-				 page_to_phys(hf_recv_page));
+			       page_to_phys(hf_recv_page));
 	if (ffa_ret.func != FFA_SUCCESS_32) {
 		pr_err("Unable to configure VM mailbox.\n");
 		print_ffa_error(ffa_ret);
@@ -1018,35 +1012,14 @@ static int __init hf_init(void)
 		goto fail_with_cleanup;
 	}
 
-	/* Get information about secondary VMs. */
-	ffa_uuid_init(0, 0, 0, 0, &null_uuid);
-	ffa_ret = ffa_partition_info_get(&null_uuid, 0);
-	if (ffa_ret.func != FFA_SUCCESS_32) {
-		pr_err("Unable to get VM information.\n");
-		print_ffa_error(ffa_ret);
-		ret = -EIO;
-		goto fail_with_cleanup;
-	}
-	secondary_vm_count = ffa_ret.arg2 - 1;
-	partition_info = page_address(hf_recv_page);
-
 	/* Confirm the maximum number of VMs looks sane. */
 	BUILD_BUG_ON(CONFIG_HAFNIUM_MAX_VMS < 1);
 	BUILD_BUG_ON(CONFIG_HAFNIUM_MAX_VMS > U16_MAX);
 
 	/* Validate the number of VMs. There must at least be the primary. */
-	if (secondary_vm_count > CONFIG_HAFNIUM_MAX_VMS - 1) {
-		pr_err("Number of VMs is out of range: %d\n",
-		       secondary_vm_count);
+	if (hf_vm_count > CONFIG_HAFNIUM_MAX_VMS - 1) {
+		pr_err("Number of VMs is out of range: %d\n", hf_vm_count);
 		ret = -EDQUOT;
-		goto fail_with_cleanup;
-	}
-
-	/* Only track the secondary VMs. */
-	hf_vms = kmalloc_array(secondary_vm_count, sizeof(struct hf_vm),
-			       GFP_KERNEL);
-	if (!hf_vms) {
-		ret = -ENOMEM;
 		goto fail_with_cleanup;
 	}
 
@@ -1055,13 +1028,15 @@ static int __init hf_init(void)
 
 	/* Initialize each VM. */
 	total_vcpu_count = 0;
-	for (i = 0; i < secondary_vm_count; i++) {
+	for (i = 0; i < hf_vm_count; i++) {
 		struct hf_vm *vm = &hf_vms[i];
 		ffa_vcpu_count_t vcpu_count;
 
 		/* Adjust the index as only the secondaries are tracked. */
-		vm->id = partition_info[i + 1].vm_id;
-		vcpu_count = partition_info[i + 1].vcpu_count;
+		vcpu_count = vm->vcpu_count;
+
+		pr_info("%s: info Id: %x vcpu count: %x\n", __func__, vm->id,
+			vcpu_count);
 
 		/* Avoid overflowing the vcpu count. */
 		if (vcpu_count > (U32_MAX - total_vcpu_count)) {
@@ -1090,11 +1065,8 @@ static int __init hf_init(void)
 			goto fail_with_cleanup;
 		}
 
-		/* Update the number of initialized VMs. */
-		hf_vm_count = i + 1;
-
 		/* Create a kernel thread for each vcpu. */
-		for (j = 0; j < vm->vcpu_count; j++) {
+		for (j = 0; j < vcpu_count; j++) {
 			struct hf_vcpu *vcpu = &vm->vcpu[j];
 
 			vcpu->task =
@@ -1114,14 +1086,6 @@ static int __init hf_init(void)
 			atomic_set(&vcpu->abort_sleep, 0);
 			atomic_set(&vcpu->waiting_for_message, 0);
 		}
-	}
-
-	ffa_ret = ffa_rx_release();
-	if (ffa_ret.func != FFA_SUCCESS_32) {
-		pr_err("Unable to release RX buffer.\n");
-		print_ffa_error(ffa_ret);
-		ret = -EIO;
-		goto fail_with_cleanup;
 	}
 
 	/* Register protocol and socket family. */
